@@ -1,6 +1,6 @@
-import { View, div, svg } from "gpui-kit";
+import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
-import { theme, layout, props, settings, shared, setShared, nextCommand, notify, exec, run, window, openOverlay, closeOverlay } from "herdr";
+import { theme, layout, props, settings, agents, shared, setShared, nextCommand, notify, exec, run, window, openOverlay, closeOverlay } from "herdr";
 
 // Time: a clock and timers for the left end of the status bar.
 //
@@ -27,10 +27,19 @@ import { theme, layout, props, settings, shared, setShared, nextCommand, notify,
 //
 // Timers live in shared "time.timers", so they survive reloads and restarts.
 // There is no limit on how many; the bar grows to fit them.
-// Click a timer to pause or resume it, its x removes it. Key commands
-// ("alt-t": "time:timer-25m" in keys.json, or `herdr-app do time.<command>`):
-// new, stopwatch, timer-<length> (25m, 90s, 1h30m), toggle (the newest),
-// pause-all, resume-all, dismiss (finished ones), clear.
+// Click a timer to pause or resume it, its x removes it.
+//
+// Who set it: the person sets timers in the dialog. Everything else arrives
+// as a command (`herdr-app do time.<command>`, or "<key>": "time:<command>"
+// in keys.json), which can't tell who sent it, so a command that starts a
+// timer must name the agent's terminal and say what the timer is for:
+//   herdr-app do "time.timer-25m @$HC_TERMINAL_ID Check the deploy"
+//   herdr-app do "time.stopwatch @$HC_TERMINAL_ID Load test"
+// The terminal must be a live agent (agents()); its name, space and tab are
+// kept with the timer and shown in the bar's tooltip, the banner and the
+// notification. A command without both is refused with a notification.
+// Other commands: new, toggle (the newest), pause-all, resume-all, dismiss
+// (finished ones), clear.
 //
 // Cost: a 1-second timer that redraws only when the text changes. The icon
 // animations run natively (spin, loop, transition), not in render.
@@ -131,7 +140,9 @@ const opts = () => {
 // --- Timers -----------------------------------------------------------------
 // { id, kind: "up" | "down", ms (countdown length), acc (ms run before the
 //   current start), at (start time, null while paused), rang (finished),
-//   doneAt, msg (shown in the bar and the banner) }
+//   doneAt, msg (shown in the bar and the banner),
+//   by (null when the person set it in the dialog, else the agent that asked:
+//   { terminal, name, icon, tint, space, tab, title }) }
 
 const timers = () => (Array.isArray(shared(TIMERS)) ? shared(TIMERS) : []);
 const saveTimers = (list) => setShared(TIMERS, list);
@@ -164,10 +175,22 @@ export function parseDuration(text) {
   return used === s.length && total > 0 ? Math.round(total) : null;
 }
 
-function addTimer(kind, ms = 0, msg = "") {
+function addTimer(kind, ms = 0, msg = "", by = null) {
   const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-  saveTimers([...timers(), { id, kind, ms, acc: 0, at: Date.now(), rang: false, doneAt: null, msg: String(msg ?? "").trim() }]);
+  saveTimers([...timers(), { id, kind, ms, acc: 0, at: Date.now(), rang: false, doneAt: null, msg: String(msg ?? "").trim(), by }]);
 }
+
+// The live agent in a terminal: "t12p" matches "t12p" or "<machine>/t12p".
+function agentAt(terminal) {
+  if (!terminal) return null;
+  return agents().find((a) => a.address === terminal || a.address.endsWith(`/${terminal}`)) ?? null;
+}
+const byOf = (a) => ({
+  terminal: a.address, name: a.program?.name || a.app || "agent", icon: a.program?.icon ?? null, tint: a.program?.tint ?? true,
+  space: a.space_name, tab: a.tab_name || `tab ${a.tab_index}`, title: a.title || "",
+});
+// "Claude Code in herdr-time › 1", or "you".
+const whoOf = (x) => (x.by ? `${x.by.name} in ${x.by.space} › ${x.by.tab}` : "you");
 function toggleTimer(id) {
   const now = Date.now();
   saveTimers(timers().flatMap((x) => {
@@ -181,7 +204,7 @@ const dismissDone = () => saveTimers(timers().filter((x) => !x.rang));
 const snooze = (id) => {
   const x = timers().find((y) => y.id === id);
   removeTimer(id);
-  if (x) addTimer("down", SNOOZE_MS, x.msg);
+  if (x) addTimer("down", SNOOZE_MS, x.msg, x.by ?? null);
 };
 const setAll = (running) => {
   const now = Date.now();
@@ -193,7 +216,7 @@ const setAll = (running) => {
 function openFlash() {
   const n = timers().filter((x) => x.rang).length;
   if (!n) return;
-  openOverlay({ mod: MOD, kind: "window", key: "time-flash", frame: "none", width: 460, height: 64 + Math.min(n, 4) * 58, props: { mode: "flash" } });
+  openOverlay({ mod: MOD, kind: "window", key: "time-flash", frame: "none", width: 560, height: 64 + Math.min(n, 4) * 74, props: { mode: "flash" } });
 }
 const openNew = () => openOverlay({ mod: MOD, kind: "dialog", width: 400, height: 330, props: { mode: "new" } });
 
@@ -202,6 +225,12 @@ const openNew = () => openOverlay({ mod: MOD, kind: "dialog", width: 400, height
 const CH_UI = 6.3, CH_MONO = 7.2, ICON = 15, GAP = 8;
 const textWidth = (t, ch) => [...t].reduce((a, c) => a + (c === "●" ? ICON : ch), 0);
 const widthOf = (texts, ch) => Math.ceil(14 + 8 + texts.reduce((a, t) => a + textWidth(t, ch), 0) + Math.max(0, texts.length - 1) * GAP);
+
+// An agent's mark: its program's icon from Herdr's icons, else a bot.
+const agentMark = (by, size, color) => {
+  const el = by?.icon ? (by.tint ? svg(by.icon) : image(by.icon)) : icon("bot");
+  return div().flex_none().text_color(color).child(el.size(size));
+};
 
 // A small button for the dialog and the banner. Stops the press so a click
 // doesn't start dragging the banner window.
@@ -238,16 +267,28 @@ export default class Time extends View {
   // --- Bar ------------------------------------------------------------------
 
   command(c) {
-    const m = /^timer-(\S+)(?:\s+([\s\S]+))?$/.exec(c);
-    const ms = m ? parseDuration(m[1]) : null;
-    if (ms) addTimer("down", ms, m[2]);
-    else if (/^stopwatch(\s|$)/.test(c)) addTimer("up", 0, c.slice(9));
-    else if (c === "toggle") { const last = timers().filter((x) => !x.rang).at(-1); if (last) toggleTimer(last.id); }
+    const start = /^(timer-(\S+)|stopwatch)(?:\s+([\s\S]*))?$/.exec(c.trim());
+    if (start) return this.commandTimer(start[2] ? "down" : "up", start[2], start[3] ?? "");
+    if (c === "toggle") { const last = timers().filter((x) => !x.rang).at(-1); if (last) toggleTimer(last.id); }
     else if (c === "pause-all") setAll(false);
     else if (c === "resume-all") setAll(true);
     else if (c === "dismiss") dismissDone();
     else if (c === "clear") saveTimers([]);
     else if (c === "new" || c === "pick") openNew();
+  }
+
+  // A timer asked for by command: needs "@<agent terminal> <message>".
+  commandTimer(kind, length, rest) {
+    const refuse = (why) => notify({ title: "Timer refused", body: why, level: "warning" });
+    const ms = kind === "down" ? parseDuration(length) : 0;
+    if (kind === "down" && !ms) return refuse(`"${length}" is not a length. Try 25m, 90s or 1h30m.`);
+    const m = /^@(\S+)\s*([\s\S]*)$/.exec(rest.trim());
+    if (!m) return refuse("Say which agent is asking: @$HC_TERMINAL_ID, then the message.");
+    const agent = agentAt(m[1]);
+    if (!agent) return refuse(`@${m[1]} is not a live agent's terminal.`);
+    const msg = m[2].trim();
+    if (!msg) return refuse(`${agent.program?.name || "An agent"} in ${agent.space_name} asked for a timer with no message. Timers need one.`);
+    addTimer(kind, ms, msg, byOf(agent));
   }
 
   tick(cx) {
@@ -257,7 +298,8 @@ export default class Time extends View {
     const due = list.filter((x) => x.kind === "down" && !x.rang && remaining(x, now) === 0);
     if (due.length) {
       saveTimers(list.map((x) => (due.includes(x) ? { ...x, rang: true, doneAt: now, acc: x.ms, at: null } : x)));
-      for (const x of due) notify({ title: "Time's up", body: nameOf(x), level: "success" });
+      for (const x of due) notify({ title: `Time's up: ${nameOf(x)}`, body: x.by ? `Set by ${whoOf(x)}` : "Your timer", level: "success",
+        action: x.by ? { name: "pane.focus", args: { terminal: x.by.terminal } } : null });
       openFlash();
       if (window()?.platform === "macos") cx.spawn(async () => { try { await exec("afplay", [SOUND], { timeout: 5000 }); } catch { /* no sound */ } });
     }
@@ -270,7 +312,7 @@ export default class Time extends View {
   texts() {
     const now = Date.now();
     const clock = pieces(strftime(opts().format, new Date(now))).map((p) => (p.sep ? "|" : p.text));
-    const ts = timers().flatMap((x) => [`●${timerText(x, now)}${x.msg ? ` ${short(x.msg)}` : ""}`, "●"]);
+    const ts = timers().flatMap((x) => [`●${timerText(x, now)}${x.msg ? ` ${short(x.msg)}` : ""}${x.by ? " ●" : ""}`, "●"]);
     return [...clock, "|", ...ts, "●"];
   }
 
@@ -308,11 +350,13 @@ export default class Time extends View {
       const what = nameOf(x);
       const text = timerText(x, now);
       const chip = h_flex().id(`tm-${x.id}`).relative().gap(5).items_center().flex_none().cursor_pointer()
-        .tooltip(done ? `${what} · done · click to dismiss` : `${what} · ${x.kind === "up" ? "stopwatch" : `${lengthOf(x.ms)} timer`} · click to ${paused ? "resume" : "pause"}`)
+        .tooltip(`${what} · ${x.kind === "up" ? "stopwatch" : `${lengthOf(x.ms)} timer`} · set by ${whoOf(x)} · ${done ? "done · click to dismiss" : `click to ${paused ? "resume" : "pause"}`}`)
         .on_click((_e, cx) => { toggleTimer(x.id); this.fit(); cx.notify(); })
         .child(this.timerIcon(x, c))
         .child(div().text_color(c).child(text))
-        .when(Boolean(x.msg), (el) => el.child(div().text_color(done ? t.blocked : t.muted).child(short(x.msg))));
+        .when(Boolean(x.msg), (el) => el.child(div().text_color(done ? t.blocked : t.muted).child(short(x.msg))))
+        // Set by an agent: its program's icon (or a bot) so it reads at a glance.
+        .when(Boolean(x.by), (el) => el.child(agentMark(x.by, 12, t.dim)));
       // A running countdown drains a thin bar under its time, smoothly.
       if (x.kind === "down" && !done) {
         const w = textWidth(text, ch) * (remaining(x, now) / x.ms);
@@ -405,14 +449,21 @@ export default class Time extends View {
     const t = theme();
     const done = timers().filter((x) => x.rang);
     const at = (ms) => (ms ? strftime("%H:%M", new Date(ms)) : "");
-    const row = (x) => h_flex().id(`fl-${x.id}`).gap(14).px(18).h(58).items_center()
+    const row = (x) => h_flex().id(`fl-${x.id}`).gap(14).px(18).h(74).items_center()
       .child(div().relative().size(26).flex_none().text_color(t.blocked)
         .child(icon("alarm").size(26))
         .loop("left", { from: -2, to: 2, period: 120, easing: "linear" }))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(div().text_size(16).font_semibold().text_color(t.foreground).truncate().child(nameOf(x)))
+        .child(h_flex().gap(5).items_center().text_size(11.5).text_color(t.dim).overflow_hidden()
+          .child(div().flex_none().child("set by"))
+          .when(Boolean(x.by), (el) => el.child(agentMark(x.by, 12, t.muted))
+            .child(div().flex_none().text_color(t.foreground).child(x.by?.name ?? ""))
+            .child(div().truncate().child(`in ${x.by?.space} › ${x.by?.tab}`)))
+          .when(!x.by, (el) => el.child(div().text_color(t.foreground).child("you"))))
         .child(div().text_size(11.5).text_color(t.dim).child(
           `${x.kind === "up" ? "stopwatch" : `${lengthOf(x.ms)} timer`} · done at ${at(x.doneAt)}`)))
+      .when(Boolean(x.by), (el) => el.child(button(t, `fg-${x.id}`, "Go", false, () => run("pane.focus", { terminal: x.by.terminal }))))
       .child(button(t, `fs-${x.id}`, `+${lengthOf(SNOOZE_MS)}`, false, () => snooze(x.id)))
       .child(button(t, `fd-${x.id}`, "Dismiss", true, () => removeTimer(x.id)));
 

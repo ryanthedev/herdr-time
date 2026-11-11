@@ -21,18 +21,33 @@ Or by hand: `scripts/install.sh` copies `mods/time` (with its icons) into `~/.co
 - **How many:** as many as you like. The bar widens to fit them; the message shows next to each one, shortened to 18 characters.
 - **Pause / resume:** click the timer. **Remove:** its `×`.
 - **Icons move:** a running stopwatch's hand sweeps, a running countdown's hourglass breathes and a bar under its time drains as it runs, a paused timer pulses slowly, a finished one shakes.
-- **When a countdown ends:** it turns red and shakes in the bar, a Herdr notification is posted, a chime plays (macOS), and a banner flashes in the middle of the window with every finished timer's message. Each row has **+5m** (snooze) and **Dismiss**; Esc dismisses them all. The banner closes itself once none are left.
+- **When a countdown ends:** it turns red and shakes in the bar, a Herdr notification is posted, a chime plays (macOS), and a banner flashes in the middle of the window with every finished timer's message and who set it. Each row has **+5m** (snooze), **Dismiss**, and **Go** for an agent's timer; Esc dismisses them all. The banner closes itself once none are left.
 - **Kept:** timers live in Herdr's shared state (`time.timers`), so they survive reloads and app restarts. A countdown that ended while Herdr was closed flashes when it opens.
 
 ![New timer](docs/new.png) ![Time's up](docs/flash.png)
 
-Key commands, for `keys.json` (`"alt-t": "time:new"`) or `herdr-app do time.<command>`:
+## Timers set by agents
+
+You set timers in the dialog. Anything else, such as an agent running `herdr-app do`, has to say which agent is asking and what the timer is for:
+
+```sh
+herdr-app do "time.timer-25m @$HC_TERMINAL_ID Check the deploy"
+herdr-app do "time.stopwatch @$HC_TERMINAL_ID Load test"
+```
+
+- **`@$HC_TERMINAL_ID`** is the agent's own terminal (herdr-core sets it in every terminal). It must be a live agent, so the mod can look up its name, space and tab.
+- **The message is required.** No blank alarms.
+- **Refused otherwise:** a command without both, with an unknown terminal, or with a bad length starts nothing and posts a "Timer refused" notification saying why.
+- **Shown everywhere:** the agent's icon sits next to its timer in the bar, the tooltip says "set by Claude Code in herdr-time › 1", the banner has a "set by" line and a **Go** button that jumps to the agent, and the "Time's up" notification names it (clicking it jumps there too).
+- **Limits:** a command can't prove who sent it, so an agent could name another agent's terminal. `herdr-app do` answers `ok` either way, so an agent doesn't see a refusal; the person does.
+
+Commands, for `herdr-app do time.<command>` or `keys.json` (`"alt-t": "time:new"`):
 
 | Command | Does |
 |---|---|
 | `new` | open the New timer dialog |
-| `stopwatch [message]` | start a stopwatch |
-| `timer-<length> [message]` | start a countdown, e.g. `timer-25m Tea is ready`, `timer-90s`, `timer-1h30m` |
+| `stopwatch @<terminal> <message>` | start a stopwatch for that agent |
+| `timer-<length> @<terminal> <message>` | start a countdown for that agent, e.g. `timer-25m @t12p Check the deploy`, `timer-90s`, `timer-1h30m` |
 | `toggle` | pause or resume the newest timer |
 | `pause-all` / `resume-all` | pause or resume every timer |
 | `dismiss` | remove every finished timer |
