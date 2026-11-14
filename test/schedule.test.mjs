@@ -1,7 +1,7 @@
 // node --test test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, ringReminders, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
+import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, ringReminders, focusBorder, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
 
 const at = (y, mo, d, h = 0, mi = 0, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime();
 
@@ -137,4 +137,27 @@ test("a repeat that came due while asleep rings once, not twice", () => {
   const o = ringReminders([{ id: "o", kind: "at", rang: false, due, repeat: null }, { id: "t", kind: "down" }], now);
   assert.equal(o.fired.length, 1);
   assert.equal(o.list[0].doneAt, due);
+});
+
+test("focusBorder turns the focus border red and puts it back", () => {
+  const mk = (focus) => ({ id: "root", children: [{ id: "a" }, { id: "main", content: { pane: { border: { color: "x" }, focus } } }] });
+  const t = mk({ width: 2, color: "#B0EFB5" });
+  const on = focusBorder(t, true, null, "#f00");
+  assert.deepEqual(on, { changed: true, saved: { color: "#B0EFB5" } });
+  assert.equal(t.children[1].content.pane.focus.color, "#f00");
+  // Ringing again changes nothing and keeps what was saved.
+  assert.deepEqual(focusBorder(t, true, on.saved, "#f00"), { changed: false, saved: on.saved });
+  const off = focusBorder(t, false, on.saved, "#f00");
+  assert.deepEqual(off, { changed: true, saved: null });
+  assert.deepEqual(t, mk({ width: 2, color: "#B0EFB5" }));
+  // A border that had no colour gets it removed again.
+  const bare = mk({ width: 2 });
+  const s2 = focusBorder(bare, true, null, "#f00").saved;
+  focusBorder(bare, false, s2, "#f00");
+  assert.deepEqual(bare, mk({ width: 2 }));
+  // A colour someone set meanwhile is left alone; nothing to restore with no saved colour.
+  const moved = mk({ width: 2, color: "#00f" });
+  assert.deepEqual(focusBorder(moved, false, { color: "#B0EFB5" }, "#f00"), { changed: false, saved: null });
+  assert.equal(moved.children[1].content.pane.focus.color, "#00f");
+  assert.deepEqual(focusBorder({ id: "r" }, true, null, "#f00"), { changed: false, saved: null });
 });

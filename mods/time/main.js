@@ -1,14 +1,14 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
-import { theme, layout, props, settings, agents, shared, setShared, nextCommand, notify, exec, run, window, openOverlay, closeOverlay } from "herdr";
+import { theme, layout, props, settings, agents, shared, setShared, nextCommand, notify, exec, run, window, openOverlay, closeOverlay, readTextFile, appHome } from "herdr";
 import {
   strftime, pieces, clockOf, lengthOf, parseDuration, parseClock, clockText, nextAt, nextDue,
-  repeatText, whenText, untilText, afterDismiss, ringReminders, WEEKDAYS,
+  repeatText, whenText, untilText, afterDismiss, ringReminders, focusBorder, WEEKDAYS,
 } from "./schedule.js";
 
 // Time: a clock, timers and reminders for the status bar.
 //
-// One mod, four views, picked by props().mode:
+// One mod, five views, picked by props().mode:
 // - "bar" (default): what is running or ringing, the next reminder, a bell
 //   with the count (opens the list), +, then the clock LAST so it stays put
 //   at the right edge of its block whatever comes and goes beside it.
@@ -16,8 +16,12 @@ import {
 //   Stopwatch; once or repeating (every <length>, daily, weekdays).
 // - "list": every reminder and timer, soonest first, each removable. The bar
 //   only shows the next reminder, so standing ones don't widen it.
-// - "flash": the banner a finished timer or reminder opens. It flashes until
-//   every one is dismissed or snoozed, then closes itself.
+// - "flash": the card a finished timer or reminder opens in the window's
+//   bottom-left corner, above the status bar. It never takes the keyboard, and
+//   closes itself once everything is dismissed or snoozed. While anything rings
+//   the layout's pane focus border turns red; see paintBorder.
+// - "probe": a window-sized transparent window that lives one frame, only to
+//   learn the window's size (the card needs it to sit at the bottom).
 //
 // Bar props (all optional, in the layout block's content.props):
 // - `format`: a strftime-style template. `%x` tokens: see schedule.js
@@ -163,14 +167,41 @@ const setAll = (running) => {
   save(items().map((x) => (!isTimer(x) || x.rang ? x : running ? (x.at ? x : { ...x, at: now }) : (x.at ? { ...x, acc: elapsed(x, now), at: null } : x))));
 };
 
-// The banner. Opening the same key again replaces the open one in place, so
-// this is safe to call whenever something rings.
-function openFlash() {
+// The ringing card, at the window's bottom-left above the status bar. Opening
+// the same key again replaces the open one, so this is safe to call whenever
+// something rings or is dismissed. It needs the window's height to sit at the
+// bottom: a probe window measures it (cached 30s); until then, or if the probe
+// never answers, the card opens where Herdr puts it.
+const CARD_W = 420, CARD_ROW = 62, CARD_HEAD = 38, BAR_H = 36, MARGIN = 14, CARD_ROWS = 3;
+const cardHeight = (n) => CARD_HEAD + Math.min(n, CARD_ROWS) * CARD_ROW + (n > CARD_ROWS ? 24 : 0);
+function openFlash(force = false) {
   const n = items().filter((x) => x.rang).length;
   if (!n) return;
-  // Header 66, a row 78, and the "and N more" line 28.
-  openOverlay({ mod: MOD, kind: "window", key: "time-banner", frame: "none", width: 600, height: 66 + Math.min(n, 4) * 78 + (n > 4 ? 28 : 0), props: { mode: "flash" } });
+  const win = shared("time.win");
+  const fresh = win && Date.now() - win.t < 30000;
+  if (!fresh && !force) return openOverlay({ mod: MOD, kind: "window", key: "time-probe", frame: "none", at: { x: 0, y: 0 }, width: 1, height: 1, props: { mode: "probe" } });
+  const at = win ? { x: MARGIN, y: Math.max(MARGIN, win.h - cardHeight(n) - BAR_H - MARGIN) } : undefined;
+  openOverlay({ mod: MOD, kind: "window", key: "time-banner", frame: "none", ...(at ? { at } : {}), width: CARD_W, height: cardHeight(n), props: { mode: "flash" } });
 }
+
+// The window's pane focus border, red while anything rings, then put back.
+// A layout.set rewrites the layout file, so the colour it replaces is kept in
+// shared "time.look" and restored the moment nothing rings, and again on start
+// if Herdr quit or crashed while it was red.
+const RED = "#ff3b30";
+async function paintBorder(on) {
+  const saved = shared("time.look");
+  const name = on ? shared("layout") : saved?.layout;
+  if (!name || (!on && !saved) || (!on && name !== shared("layout"))) { if (!on && saved) setShared("time.look", null); return; }
+  const text = await readTextFile(`${appHome()}/layouts/${name}.json`);
+  if (!text) return;
+  const tree = JSON.parse(text);
+  const r = focusBorder(tree, on, saved ? { color: saved.color } : null, RED);
+  setShared("time.look", r.saved ? { layout: name, color: r.saved.color } : null);
+  if (!r.changed) return;
+  run("layout.set", { layout: tree });
+}
+
 const openNew = () => openOverlay({ mod: MOD, kind: "dialog", width: 460, height: 430, props: { mode: "new" } });
 const openList = () => openOverlay({ mod: MOD, kind: "dialog", width: 500, height: Math.min(560, 132 + Math.max(1, items().length) * 58), props: { mode: "list" } });
 
@@ -215,6 +246,7 @@ export default class Time extends View {
     if (this.mode === "new") return this.initNew(cx);
     if (this.mode === "flash") return this.initFlash(cx);
     if (this.mode === "list") return this.initList(cx);
+    if (this.mode === "probe") return;
     this.shown = ""; this.width = 0;
     this.tick(cx);
     if (items().some((x) => x.rang)) openFlash();            // rang while Herdr was closed
@@ -231,10 +263,22 @@ export default class Time extends View {
     if (this.mode === "new") return this.renderNew();
     if (this.mode === "flash") return this.renderFlash();
     if (this.mode === "list") return this.renderList();
+    if (this.mode === "probe") return this.renderProbe();
     return this.renderBar();
   }
 
   close() { closeOverlay(props().overlay); }
+
+  // Reports the window's size once, closes, and lets the card open at the bottom.
+  renderProbe() {
+    return div().size_full().on_size_change((size, _cx) => {
+      if (this.measured || size.width < 100 || size.height < 100) return;
+      this.measured = true;
+      setShared("time.win", { w: size.width, h: size.height, t: Date.now() });
+      this.close();
+      openFlash();
+    });
+  }
 
   // --- Commands ---------------------------------------------------------------
 
@@ -288,7 +332,13 @@ export default class Time extends View {
       for (const x of due) notify({ title: `${x.kind === "at" ? "Reminder" : "Time's up"}: ${nameOf(x)}`, body: x.by ? `Set by ${whoOf(x)}` : x.repeat ? `Repeats ${repeatText(x.repeat)}` : "Your reminder", level: "success",
         action: x.by ? { name: "pane.focus", args: { terminal: x.by.terminal } } : null });
       openFlash();
+      cx.timer.after(800, () => openFlash(true));   // if the probe never answered
       if (window()?.platform === "macos") cx.spawn(async () => { try { await exec("afplay", [SOUND], { timeout: 5000 }); } catch { /* no sound */ } });
+    }
+    const ringing = items().some((x) => x.rang);
+    if (!this.painting && (ringing !== Boolean(this.red) || (!ringing && shared("time.look")))) {
+      this.painting = true; this.red = ringing;
+      paintBorder(ringing).catch(() => {}).finally(() => { this.painting = false; });
     }
     const shown = [strftime(opts().format, new Date(now)), ...items().map((x) => `${x.id}${x.at ? "" : "p"}${x.rang ? "r" : ""}${isTimer(x) ? timerText(x, now) : x.due}${x.msg}`)].join("|");
     if (shown !== this.shown) { this.shown = shown; cx.notify(); }
@@ -589,8 +639,7 @@ export default class Time extends View {
   // --- Flash banner -------------------------------------------------------------
 
   initFlash(cx) {
-    this.handle = cx.focus_handle();
-    cx.timer.after(50, () => this.handle.focus());
+    // No focus grab: the terminal keeps the keyboard. Buttons dismiss it.
     cx.timer.every(500, (cx) => {
       if (!items().some((x) => x.rang)) this.close(); else cx.notify();
     });
@@ -602,36 +651,34 @@ export default class Time extends View {
     const done = items().filter((x) => x.rang);
     const at = (ms) => (ms ? whenText(ms, now) : "");
     const line = (x) => x.kind === "at"
-      ? `${x.repeat ? `${repeatText(x.repeat)} · next ${whenText(nextDue(x.repeat, now), now)}` : "reminder"} · rang at ${at(x.doneAt)}`
-      : `${kindText(x)} · done at ${at(x.doneAt)}`;
-    const row = (x) => h_flex().id(`fl-${x.id}`).gap(14).px(20).h(78).items_center().border_t(1).border_color(alpha(t.blocked, 0.25))
-      .child(div().relative().size(36).flex_none().rounded(18).bg(alpha(t.blocked, 0.15)).flex().items_center().justify_center().text_color(t.blocked)
-        .child(div().relative().child(icon("alarm").size(20)).loop("left", { from: -1.5, to: 1.5, period: 120, easing: "linear" })))
-      .child(v_flex().flex_1().min_w(0).gap(2)
-        .child(div().text_size(16).font_semibold().text_color(t.foreground).truncate().child(nameOf(x)))
-        .child(div().text_size(11.5).text_color(t.muted).truncate().child(line(x)))
-        .child(h_flex().gap(5).items_center().text_size(11.5).text_color(t.dim).overflow_hidden()
-          .child(div().flex_none().child("set by"))
-          .when(Boolean(x.by), (el) => el.child(agentMark(x.by, 12, t.muted))
-            .child(div().flex_none().text_color(t.foreground).child(x.by?.name ?? ""))
-            .child(div().truncate().child(`in ${x.by?.space} › ${x.by?.tab}`)))
-          .when(!x.by, (el) => el.child(div().text_color(t.foreground).child("you")))))
+      ? `${x.repeat ? `${repeatText(x.repeat)} · next ${whenText(nextDue(x.repeat, now), now)}` : "reminder"} · rang ${at(x.doneAt)}`
+      : `${kindText(x)} · done ${at(x.doneAt)}`;
+    const who = (x) => (x.by ? `${x.by.name} in ${x.by.space}` : "you");
+    const row = (x) => h_flex().id(`fl-${x.id}`).gap(10).px(14).h(CARD_ROW).items_center().border_t(1).border_color(alpha(t.blocked, 0.25))
+      .child(div().relative().size(28).flex_none().rounded(14).bg(alpha(t.blocked, 0.15)).flex().items_center().justify_center().text_color(t.blocked)
+        .child(div().relative().child(icon("alarm").size(16)).loop("left", { from: -1.5, to: 1.5, period: 120, easing: "linear" })))
+      .child(v_flex().flex_1().min_w(0).gap(1)
+        .child(div().text_size(13.5).font_semibold().text_color(t.foreground).truncate().child(nameOf(x)))
+        .child(div().text_size(11).text_color(t.muted).truncate().child(line(x)))
+        .child(h_flex().gap(4).items_center().text_size(11).text_color(t.dim).overflow_hidden()
+          .when(Boolean(x.by), (el) => el.child(agentMark(x.by, 11, t.muted)))
+          .child(div().truncate().child(`set by ${who(x)}`))))
       .when(Boolean(x.by), (el) => el.child(button(t, `fg-${x.id}`, "Go", false, () => run("pane.focus", { terminal: x.by.terminal }))))
-      .child(button(t, `fs-${x.id}`, `+${lengthOf(SNOOZE_MS)}`, false, () => { snooze(x.id); openFlash(); }))
-      .child(button(t, `fd-${x.id}`, x.repeat ? "Done" : "Dismiss", true, () => { dismiss(x.id); openFlash(); }));
+      .child(button(t, `fs-${x.id}`, `+${lengthOf(SNOOZE_MS)}`, false, () => { snooze(x.id); openFlash(true); }))
+      .child(button(t, `fd-${x.id}`, x.repeat ? "Done" : "Dismiss", true, () => { dismiss(x.id); openFlash(true); }));
 
-    return v_flex().id("time-flash").track_focus(this.handle)
-      .on_key_down((e, cx) => { if (e.key === "escape") { dismissAll(); this.close(); cx.stop_propagation(); } })
-      .relative().size_full().rounded(14).overflow_hidden().bg(t.popover).border_2().border_color(t.blocked)
+    // No track_focus: the card never holds the keyboard, so Esc isn't heard here.
+    return v_flex().id("time-flash")
+      .relative().size_full().rounded(12).overflow_hidden().bg(t.popover).border_2().border_color(t.blocked)
       .text_color(t.foreground)
       // The flash: a layer of the alarm color pulsing over the card.
       .child(div().absolute().top(0).left(0).size_full().bg(t.blocked).loop("opacity", { from: 0.03, to: 0.16, period: 900 }))
-      .child(h_flex().px(20).pt(16).pb(10).items_center().gap(8)
-        .child(div().text_color(t.blocked).child(icon("bell").size(15)))
-        .child(div().flex_1().text_size(13).font_semibold().text_color(t.blocked).child(done.length > 1 ? `${done.length} reminders` : "Reminder"))
-        .child(div().text_size(15).font_semibold().text_color(t.foreground).child(strftime("%H:%M", new Date(now))))
-        .child(div().pl(8).text_size(11).text_color(t.dim).child("Esc dismisses all")))
-      .children(done.slice(0, 4).map(row))
-      .when(done.length > 4, (el) => el.child(div().px(20).text_size(11.5).text_color(t.dim).child(`and ${done.length - 4} more`)));
+      .child(h_flex().px(14).h(CARD_HEAD).items_center().gap(8)
+        .child(div().text_color(t.blocked).child(icon("bell").size(14)))
+        .child(div().flex_1().text_size(12.5).font_semibold().text_color(t.blocked).child(done.length > 1 ? `${done.length} reminders` : "Reminder"))
+        .child(div().text_size(13).font_semibold().text_color(t.foreground).child(strftime("%H:%M", new Date(now))))
+        .when(done.length > 1, (el) => el.child(button(t, "fl-all", "Dismiss all", false, () => { dismissAll(); this.close(); }))))
+      .children(done.slice(0, CARD_ROWS).map(row))
+      .when(done.length > CARD_ROWS, (el) => el.child(div().px(14).h(24).text_size(11).text_color(t.dim).child(`and ${done.length - CARD_ROWS} more`)));
   }
 }

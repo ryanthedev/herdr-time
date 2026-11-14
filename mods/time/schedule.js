@@ -227,3 +227,24 @@ export function ringReminders(list, now) {
   });
   return { list: fired.length ? next : list, fired };
 }
+
+const findLook = (n) => (n?.content?.pane?.focus ? n : (n?.children ?? []).map(findLook).find(Boolean));
+
+// The pane focus border while something rings. Edits a layout tree in place:
+// on = true turns the focus colour `red` and returns what to remember (the
+// colour it replaced); on = false puts `saved` back, but only if the border is
+// still our red (a colour someone changed meanwhile is theirs). Returns
+// { changed, saved }: `saved` is what to keep in storage (null: nothing).
+export function focusBorder(tree, on, saved, red) {
+  const focus = findLook(tree)?.content.pane.focus;
+  if (!focus) return { changed: false, saved: on ? saved : null };
+  if (on) {
+    if (focus.color === red) return { changed: false, saved };
+    const keep = saved ?? { color: focus.color ?? null };
+    focus.color = red;
+    return { changed: true, saved: keep };
+  }
+  if (focus.color !== red || !saved) return { changed: false, saved: null };
+  if (saved.color === null) delete focus.color; else focus.color = saved.color;
+  return { changed: true, saved: null };
+}
