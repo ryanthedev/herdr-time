@@ -1,7 +1,7 @@
 // node --test test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
+import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
 
 const at = (y, mo, d, h = 0, mi = 0, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime();
 
@@ -79,4 +79,36 @@ test("parseDuration still reads lengths", () => {
   assert.equal(parseDuration("25m"), 1500000);
   assert.equal(parseDuration("1h30m"), 5400000);
   assert.equal(parseDuration("15:00"), null);
+});
+
+test("a repeat dismissed just before its next slot waits a full interval", () => {
+  const from = at(2026, 11, 13, 9, 0), every = 25 * 60000;
+  const r = { every, from };
+  // Slots 9:00, 9:25, 9:50. Done at 9:24:59 would ring at 9:25:00; skip it.
+  assert.equal(nextDue(r, at(2026, 11, 13, 9, 24) + 59000), at(2026, 11, 13, 9, 50));
+  // Exactly half an interval away still counts.
+  assert.equal(nextDue(r, at(2026, 11, 13, 9, 25) - every / 2), at(2026, 11, 13, 9, 25));
+  assert.equal(nextDue(r, at(2026, 11, 13, 9, 12)), at(2026, 11, 13, 9, 25));
+});
+
+test("reringSlot: a ringing repeat rings again when its next slot passes", () => {
+  const due = at(2026, 11, 13, 9, 0);
+  const x = { kind: "at", rang: true, due, doneAt: due, repeat: { every: 30 * 60000, from: due } };
+  assert.equal(reringSlot(x, at(2026, 11, 13, 9, 29)), null);
+  assert.equal(reringSlot(x, at(2026, 11, 13, 9, 30)), at(2026, 11, 13, 9, 30));
+  // Missed several: the latest passed slot, once.
+  assert.equal(reringSlot(x, at(2026, 11, 13, 11, 10)), at(2026, 11, 13, 11, 0));
+  assert.equal(reringSlot({ ...x, rang: false }, at(2026, 11, 13, 12, 0)), null);
+  assert.equal(reringSlot({ ...x, repeat: null }, at(2026, 11, 13, 12, 0)), null);
+  const daily = { kind: "at", rang: true, due, doneAt: due, repeat: { at: { h: 9, m: 0 } } };
+  assert.equal(reringSlot(daily, at(2026, 11, 14, 8, 59)), null);
+  assert.equal(reringSlot(daily, at(2026, 11, 14, 9, 0)), at(2026, 11, 14, 9, 0));
+});
+
+test("whenText names past days", () => {
+  const now = at(2026, 11, 13, 14, 0);
+  assert.equal(whenText(at(2026, 11, 13, 9, 0), now), "09:00");
+  assert.equal(whenText(at(2026, 11, 12, 23, 30), now), "yesterday 23:30");
+  assert.equal(whenText(at(2026, 11, 11, 9, 0), now), "Wed 09:00");
+  assert.equal(whenText(at(2026, 11, 1, 9, 0), now), "1 Nov 09:00");
 });

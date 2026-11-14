@@ -3,7 +3,7 @@ import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, layout, props, settings, agents, shared, setShared, nextCommand, notify, exec, run, window, openOverlay, closeOverlay } from "herdr";
 import {
   strftime, pieces, clockOf, lengthOf, parseDuration, parseClock, clockText, nextAt, nextDue,
-  repeatText, whenText, untilText, afterDismiss, WEEKDAYS,
+  repeatText, whenText, untilText, afterDismiss, reringSlot, WEEKDAYS,
 } from "./schedule.js";
 
 // Time: a clock, timers and reminders for the status bar.
@@ -164,7 +164,8 @@ const setAll = (running) => {
 function openFlash() {
   const n = items().filter((x) => x.rang).length;
   if (!n) return;
-  openOverlay({ mod: MOD, kind: "window", key: "time-banner", frame: "none", width: 600, height: 66 + Math.min(n, 4) * 78, props: { mode: "flash" } });
+  // Header 66, a row 78, and the "and N more" line 28.
+  openOverlay({ mod: MOD, kind: "window", key: "time-banner", frame: "none", width: 600, height: 66 + Math.min(n, 4) * 78 + (n > 4 ? 28 : 0), props: { mode: "flash" } });
 }
 const openNew = () => openOverlay({ mod: MOD, kind: "dialog", width: 460, height: 430, props: { mode: "new" } });
 const openList = () => openOverlay({ mod: MOD, kind: "dialog", width: 500, height: Math.min(560, 132 + Math.max(1, items().length) * 58), props: { mode: "list" } });
@@ -234,7 +235,7 @@ export default class Time extends View {
   // --- Commands ---------------------------------------------------------------
 
   command(c) {
-    const start = /^(timer-\S+|stopwatch|at-\S+|every-\S+|daily-\S+|weekdays-\S+)(?:\s+([\s\S]*))?$/.exec(c.trim());
+    const start = /^(timer-\S*|stopwatch|at-\S*|every-\S*|daily-\S*|weekdays-\S*)(?:\s+([\s\S]*))?$/.exec(c.trim());
     if (start) return this.commandStart(start[1], start[2] ?? "");
     if (c === "toggle") { const last = items().filter((x) => isTimer(x) && !x.rang).at(-1); if (last) toggleTimer(last.id); }
     else if (c === "pause-all") setAll(false);
@@ -273,11 +274,14 @@ export default class Time extends View {
   tick(cx) {
     const now = Date.now();
     // Countdowns that ran out and reminders that came due: mark, announce, flash, ring.
-    const list = items();
-    const due = list.filter((x) => !x.rang && ((x.kind === "down" && x.at && remaining(x, now) === 0) || (x.kind === "at" && x.due <= now)));
+    // A repeating reminder nobody dismissed: its next slot passed, so it rings again.
+    const again = new Map(items().flatMap((x) => { const slot = reringSlot(x, now); return slot ? [[x.id, slot]] : []; }));
+    const list = items().map((x) => (again.has(x.id) ? { ...x, rang: false } : x));
+    const due = list.filter((x) => !x.rang && ((x.kind === "down" && x.at && remaining(x, now) === 0) || (x.kind === "at" && (again.has(x.id) || x.due <= now))));
     if (due.length) {
       save(list.map((x) => (!due.includes(x) ? x
         : x.kind === "down" ? { ...x, rang: true, doneAt: now, acc: x.ms, at: null }
+        : again.has(x.id) ? { ...x, rang: true, due: again.get(x.id), doneAt: again.get(x.id) }
         : { ...x, rang: true, doneAt: x.due })));
       for (const x of due) notify({ title: `${x.kind === "at" ? "Reminder" : "Time's up"}: ${nameOf(x)}`, body: x.by ? `Set by ${whoOf(x)}` : x.repeat ? `Repeats ${repeatText(x.repeat)}` : "Your reminder", level: "success",
         action: x.by ? { name: "pane.focus", args: { terminal: x.by.terminal } } : null });
@@ -459,7 +463,13 @@ export default class Time extends View {
   start(ms) {
     const msg = this.msg.value();
     if (this.kind === "up") { addTimer("up", 0, msg); return this.close(); }
-    if (ms) { this.kind === "in" && this.rep === "repeat" ? addReminder({ every: ms, repeat: true, msg }) : addTimer("down", ms, msg); return this.close(); }
+    if (ms) {
+      if (this.kind === "in" && this.rep === "repeat") {
+        if (ms < 60000) { this.err = "Repeats need at least 1m between rings."; return; }
+        addReminder({ every: ms, repeat: true, msg });
+      } else addTimer("down", ms, msg);
+      return this.close();
+    }
     const p = this.preview();
     if (!p.ok) { this.err = p.err ? p.text : this.kind === "at" ? "Type a time of day first." : "Type a length first."; return; }
     if (this.kind === "in") {
@@ -569,7 +579,7 @@ export default class Time extends View {
     const t = theme();
     const now = Date.now();
     const done = items().filter((x) => x.rang);
-    const at = (ms) => (ms ? strftime("%H:%M", new Date(ms)) : "");
+    const at = (ms) => (ms ? whenText(ms, now) : "");
     const line = (x) => x.kind === "at"
       ? `${x.repeat ? `${repeatText(x.repeat)} · next ${whenText(nextDue(x.repeat, now), now)}` : "reminder"} · rang at ${at(x.doneAt)}`
       : `${kindText(x)} · done at ${at(x.doneAt)}`;
@@ -586,8 +596,8 @@ export default class Time extends View {
             .child(div().truncate().child(`in ${x.by?.space} › ${x.by?.tab}`)))
           .when(!x.by, (el) => el.child(div().text_color(t.foreground).child("you")))))
       .when(Boolean(x.by), (el) => el.child(button(t, `fg-${x.id}`, "Go", false, () => run("pane.focus", { terminal: x.by.terminal }))))
-      .child(button(t, `fs-${x.id}`, `+${lengthOf(SNOOZE_MS)}`, false, () => snooze(x.id)))
-      .child(button(t, `fd-${x.id}`, x.repeat ? "Done" : "Dismiss", true, () => dismiss(x.id)));
+      .child(button(t, `fs-${x.id}`, `+${lengthOf(SNOOZE_MS)}`, false, () => { snooze(x.id); openFlash(); }))
+      .child(button(t, `fd-${x.id}`, x.repeat ? "Done" : "Dismiss", true, () => { dismiss(x.id); openFlash(); }));
 
     return v_flex().id("time-flash").track_focus(this.handle)
       .on_key_down((e, cx) => { if (e.key === "escape") { dismissAll(); this.close(); cx.stop_propagation(); } })

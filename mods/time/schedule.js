@@ -126,14 +126,18 @@ export function nextAt({ h, m }, days, after) {
 
 // When a repeating reminder rings next, strictly after `after`:
 // { every: ms, from: ms } rings at from + k*every (never drifts, and a long
-// sleep skips the missed slots instead of ringing once per slot);
+// sleep skips the missed slots instead of ringing once per slot; a slot less
+// than half an interval away is skipped too, so dismissing a 25m reminder at
+// 24m59s waits a full 25m instead of ringing again a second later);
 // { at: {h, m}, days } rings at that time of day on those days.
 export function nextDue(repeat, after) {
   if (!repeat) return null;
   if (repeat.every > 0) {
     const from = Number(repeat.from) || after;
     if (from > after) return from;
-    return from + (Math.floor((after - from) / repeat.every) + 1) * repeat.every;
+    let slot = from + (Math.floor((after - from) / repeat.every) + 1) * repeat.every;
+    if (slot - after < repeat.every / 2) slot += repeat.every;
+    return slot;
   }
   if (repeat.at) return nextAt(repeat.at, repeat.days, after);
   return null;
@@ -151,15 +155,17 @@ export function repeatText(repeat) {
   return [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map((d) => DAYS[d].slice(0, 3)).join(" ");
 }
 
-// When something is due, said briefly from now: "15:00" today, "tomorrow
-// 09:00", "Mon 09:00" within a week, else "14 Nov 09:00".
+// When something is due or rang, said briefly from now: "15:00" today,
+// "tomorrow 09:00" / "yesterday 09:00", "Mon 09:00" within a week either way,
+// else "14 Nov 09:00".
 export function whenText(due, now) {
   const d = new Date(due), n = new Date(now);
   const t = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const days = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(n.getFullYear(), n.getMonth(), n.getDate())) / DAY_MS);
-  if (days <= 0) return t;
+  if (days === 0) return t;
   if (days === 1) return `tomorrow ${t}`;
-  if (days < 7) return `${DAYS[d.getDay()].slice(0, 3)} ${t}`;
+  if (days === -1) return `yesterday ${t}`;
+  if (Math.abs(days) < 7) return `${DAYS[d.getDay()].slice(0, 3)} ${t}`;
   return `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)} ${t}`;
 }
 
@@ -183,4 +189,15 @@ export function afterDismiss(x, now) {
     if (due) return { ...x, rang: false, doneAt: null, due };
   }
   return null;
+}
+
+// A repeating reminder left ringing: the latest slot after the one that rang
+// that has already passed (null if the next slot is still ahead, or this is not
+// a ringing repeat). Several missed slots count once.
+export function reringSlot(x, now) {
+  if (x.kind !== "at" || !x.repeat || !x.rang) return null;
+  let slot = nextDue(x.repeat, x.due);
+  if (!slot || slot > now) return null;
+  for (let next = nextDue(x.repeat, slot); next && next <= now; next = nextDue(x.repeat, slot)) slot = next;
+  return slot;
 }
