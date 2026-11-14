@@ -164,7 +164,7 @@ const setAll = (running) => {
 function openFlash() {
   const n = items().filter((x) => x.rang).length;
   if (!n) return;
-  openOverlay({ mod: MOD, kind: "window", key: "time-flash", frame: "none", width: 600, height: 66 + Math.min(n, 4) * 78, props: { mode: "flash" } });
+  openOverlay({ mod: MOD, kind: "window", key: "time-banner", frame: "none", width: 600, height: 66 + Math.min(n, 4) * 78, props: { mode: "flash" } });
 }
 const openNew = () => openOverlay({ mod: MOD, kind: "dialog", width: 460, height: 430, props: { mode: "new" } });
 const openList = () => openOverlay({ mod: MOD, kind: "dialog", width: 500, height: Math.min(560, 132 + Math.max(1, items().length) * 58), props: { mode: "list" } });
