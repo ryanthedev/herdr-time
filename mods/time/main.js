@@ -30,6 +30,9 @@ import {
 //   bar doesn't shift every second. `""` uses the app's UI font.
 // - `block` (default "time"): this block's layout id, so the mod can widen or
 //   narrow it as things come and go.
+// - `fill` (default false): the block's size is the layout's (give it a weight,
+//   never resized). The clock is centered in the block; the chips, bell and +
+//   sit to its right, left-aligned, clipped if they don't fit.
 //
 // Everything lives in shared "time.timers", so it survives reloads and
 // restarts. A reminder that came due while Herdr was closed rings once on
@@ -80,6 +83,7 @@ const opts = () => {
     tooltip: typeof p.tooltip === "string" ? p.tooltip : DEFAULT_TOOLTIP,
     presets: presets.length ? presets : DEFAULT_PRESETS,
     block: typeof p.block === "string" && p.block ? p.block : "time",
+    fill: p.fill === true,
     font: typeof p.font === "string" ? p.font : String(settings()?.font_family ?? ""),
   };
 };
@@ -327,7 +331,7 @@ export default class Time extends View {
         .on_click(() => openNew())
         .child(icon("plus").size(13)),
     });
-    out.push({ w: ch, el: () => div().flex_none().text_color(t.border).child("|") });
+    out.push({ w: ch, sep: true, el: () => div().flex_none().text_color(t.border).child("|") });
     const ps = pieces(strftime(opts().format, new Date(now)));
     const cw = ps.reduce((a, p) => a + (p.sep ? ch : [...p.text].length * ch * (p.bright ? BIG : 1)), 0) + Math.max(0, ps.length - 1) * GAP;
     const { tooltip } = opts();
@@ -379,11 +383,13 @@ export default class Time extends View {
   }
 
   fit() {
+    if (opts().fill) return;
     const ps = this.parts(Date.now(), theme());
     const px = Math.ceil(PAD_L + PAD_R + SLACK + ps.reduce((a, p) => a + p.w, 0) + Math.max(0, ps.length - 1) * GAP);
     if (Math.abs(px - this.width) >= 4) this.resize(px);
   }
   resize(px) {
+    if (opts().fill) return;
     this.width = px;
     run("layout.resize", { id: opts().block, px });
   }
@@ -404,7 +410,19 @@ export default class Time extends View {
 
   renderBar() {
     const t = theme();
-    const { font } = opts();
+    const { font, fill } = opts();
+    if (fill) {
+      // Two equal flexible sides around the clock keep it exactly centered; the
+      // left one is empty, the right one holds the chips, left-aligned.
+      const ps = this.parts(Date.now(), t).filter((p) => !p.sep);
+      const clock = ps.pop();
+      return h_flex().id("time-bar").size_full().px(PAD_L).items_center().whitespace_nowrap().overflow_hidden()
+        .bg(glass(t.background)).border_t(1).border_color(t.border).text_size(11.8)
+        .when(Boolean(font), (el) => el.font_family(font))
+        .child(div().flex_1().min_w(0))
+        .child(clock.el())
+        .child(h_flex().flex_1().min_w(0).pl(GAP * 2).gap(GAP).items_center().overflow_hidden().children(ps.map((p) => p.el())));
+    }
     return h_flex().id("time-bar").size_full().pl(PAD_L).pr(PAD_R).gap(GAP).items_center().justify_end().whitespace_nowrap().overflow_hidden()
       .bg(glass(t.background)).border_t(1).border_color(t.border).text_size(11.8)
       .when(Boolean(font), (el) => el.font_family(font))

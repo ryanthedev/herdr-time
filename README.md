@@ -88,6 +88,7 @@ Set in the layout block's props (all optional):
 - **`presets`** are the countdown lengths (minutes) the dialog offers.
 - **`font`** is the font family. Left out, it uses your terminals' font (monospaced), so digits keep their width and the bar doesn't shift each second. `""` uses the app's UI font.
 - **`block`** is this block's layout id. The mod resizes it to fit as things come and go.
+- **`fill`** (`true`) makes the block take the layout's size (give it a weight; it is never resized). The clock is centered in it and the chips, bell and `+` sit to its right.
 
 ## Placing it
 
