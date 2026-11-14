@@ -29,7 +29,7 @@ Or by hand: `scripts/install.sh` copies `mods/time` (every `*.js` file and its i
 - **Icons move:** a running stopwatch's hand sweeps, a running countdown's hourglass breathes and a line under it drains, a paused timer pulses slowly, a ringing one shakes.
 - **Left ringing:** a repeating reminder you don't dismiss rings again when its next time comes. A repeat dismissed less than half an interval before its next time waits a full interval.
 - **The red border:** while anything rings, the terminal pane's focus border turns red (the layout's `pane.focus.color`, set with `layout.set`), and goes back the moment nothing rings. The colour it replaced is kept in shared `time.look`, so a restart while red restores it. The card opens small in the window's bottom-left corner above the status bar and never takes the keyboard (buttons only, no Esc). The window's outer frame is Herdr's and can't be changed.
-- **When one rings:** it turns red in the bar, a Herdr notification is posted, a chime plays (macOS), and a banner flashes in the middle of the window with every ringing item and who set it. Each row has **Dismiss** (**Done** for a repeating reminder, which then moves to its next time), **+5m** (snooze; the series is kept) and **Go** for an agent's; Esc dismisses them all.
+- **When one rings:** it turns red in the bar, a Herdr notification is posted, a chime plays (macOS), and a card with every ringing item and who set it opens: docked in a hidden layout block when the bar has a `dock` prop (below), else floating at the window's bottom-left. Each row has **Dismiss** (**Done** for a repeating reminder, which then moves to its next time), **+5m** (snooze; the series is kept) and **Go** for an agent's; Esc dismisses them all.
 - **Kept:** items live in Herdr's shared state (`time.timers`), so they survive reloads and restarts. One that came due while Herdr was closed rings once on start; a repeating one then skips to its next future time.
 
 ![New timer](docs/new.png) ![Time's up](docs/flash.png)
@@ -90,6 +90,7 @@ Set in the layout block's props (all optional):
 - **`font`** is the font family. Left out, it uses your terminals' font (monospaced), so digits keep their width and the bar doesn't shift each second. `""` uses the app's UI font.
 - **`block`** is this block's layout id. The mod resizes it to fit as things come and go.
 - **`fill`** (`true`) makes the block take the layout's size (give it a weight; it is never resized). The clock is centered in it and the chips, bell and `+` sit to its right.
+- **`dock`** (a block id, e.g. `"time-ring"`) docks the ringing card: add a hidden block `{ "id": "time-ring", "type": "block", "size": { "px": 170 }, "hidden": true, "content": { "mod": "time", "props": { "mode": "dock" } } }` to a visible column; the bar shows it while anything rings and hides it after. A hidden parent (a collapsed sidebar) hides it too. Without `dock`, the floating card is used.
 
 ## Placing it
 
