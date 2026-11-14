@@ -3,7 +3,7 @@ import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, layout, props, settings, agents, shared, setShared, nextCommand, notify, exec, run, window, openOverlay, closeOverlay, readTextFile, appHome } from "herdr";
 import {
   strftime, pieces, clockOf, lengthOf, parseDuration, parseClock, clockText, nextAt, nextDue,
-  repeatText, whenText, untilText, afterDismiss, ringReminders, focusBorder, WEEKDAYS,
+  repeatText, whenText, untilText, afterDismiss, ringReminders, focusBorder, setHidden, WEEKDAYS,
 } from "./schedule.js";
 
 // Time: a clock, timers and reminders for the status bar.
@@ -202,7 +202,9 @@ async function paintBorder(on) {
   const tree = JSON.parse(text);
   const r = focusBorder(tree, on, saved ? { color: saved.color } : null, RED);
   setShared("time.look", r.saved ? { layout: name, color: r.saved.color } : null);
-  if (!r.changed) return;
+  // The dock's shown state rides in the same tree: layout.set would undo a layout.show.
+  const dock = opts().dock ? setHidden(tree, opts().dock, !on) : false;
+  if (!r.changed && !dock) return;
   run("layout.set", { layout: tree });
 }
 
@@ -666,7 +668,7 @@ export default class Time extends View {
   }
 
   // The ringing rows: a floating card (flash) or the docked block (dock). The
-  // dock is as narrow as the sidebar, so each row stacks its buttons below.
+  // dock spans the work area, so its card is CARD_W wide and left-aligned.
   renderFlash() {
     const t = theme();
     const now = Date.now();
@@ -691,13 +693,9 @@ export default class Time extends View {
         .child(div().truncate().child(`set by ${who(x)}`)));
     const badge = () => div().relative().size(28).flex_none().rounded(14).bg(alpha(t.blocked, 0.15)).flex().items_center().justify_center().text_color(t.blocked)
       .child(div().relative().child(icon("alarm").size(16)).loop("left", { from: -1.5, to: 1.5, period: 120, easing: "linear" }));
-    const row = (x) => (dock
-      ? v_flex().id(`fl-${x.id}`).gap(8).px(12).py(10).border_t(1).border_color(alpha(t.blocked, 0.25))
-        .child(h_flex().gap(10).items_center().child(badge()).child(info(x)))
-        .child(h_flex().gap(6).justify_end().children(buttons(x)))
-      : h_flex().id(`fl-${x.id}`).gap(10).px(14).h(CARD_ROW).items_center().border_t(1).border_color(alpha(t.blocked, 0.25))
-        .child(badge()).child(info(x)).children(buttons(x)));
-    const head = h_flex().px(dock ? 12 : 14).h(CARD_HEAD).flex_none().items_center().gap(8)
+    const row = (x) => h_flex().id(`fl-${x.id}`).gap(10).px(14).h(CARD_ROW).flex_none().items_center().border_t(1).border_color(alpha(t.blocked, 0.25))
+      .child(badge()).child(info(x)).children(buttons(x));
+    const head = h_flex().px(14).h(CARD_HEAD).flex_none().items_center().gap(8)
       .child(div().text_color(t.blocked).child(icon("bell").size(14)))
       .child(div().flex_1().text_size(12.5).font_semibold().text_color(t.blocked).child(done.length > 1 ? `${done.length} reminders` : "Reminder"))
       .child(div().text_size(13).font_semibold().text_color(t.foreground).child(strftime("%H:%M", new Date(now))))
@@ -707,9 +705,10 @@ export default class Time extends View {
     // track_focus: it never holds the keyboard, so Esc isn't heard here.
     const pulse = div().absolute().top(0).left(0).size_full().bg(t.blocked).loop("opacity", { from: 0.03, to: 0.16, period: 900 });
     if (dock) {
-      return v_flex().id("time-dock").relative().size_full().overflow_hidden().bg(t.popover).border_t(2).border_color(t.blocked).text_color(t.foreground)
-        .child(pulse).child(head)
-        .child(v_flex().id("time-dock-rows").flex_1().min_h(0).overflow_y_scrollbar().children(done.map(row)));
+      return h_flex().size_full().bg(t.background).child(
+        v_flex().id("time-dock").relative().w(CARD_W).h_full().flex_none().overflow_hidden().bg(t.popover).border_2().border_color(t.blocked).text_color(t.foreground)
+          .child(pulse).child(head)
+          .child(v_flex().id("time-dock-rows").flex_1().min_h(0).overflow_y_scrollbar().children(done.map(row))));
     }
     return v_flex().id("time-flash")
       .relative().size_full().rounded(12).overflow_hidden().bg(t.popover).border_2().border_color(t.blocked)

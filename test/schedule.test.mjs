@@ -1,7 +1,7 @@
 // node --test test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, ringReminders, focusBorder, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
+import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, ringReminders, focusBorder, setHidden, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
 
 const at = (y, mo, d, h = 0, mi = 0, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime();
 
@@ -160,4 +160,14 @@ test("focusBorder turns the focus border red and puts it back", () => {
   assert.deepEqual(focusBorder(moved, false, { color: "#B0EFB5" }, "#f00"), { changed: false, saved: null });
   assert.equal(moved.children[1].content.pane.focus.color, "#00f");
   assert.deepEqual(focusBorder({ id: "r" }, true, null, "#f00"), { changed: false, saved: null });
+});
+
+test("setHidden shows and hides one block by id", () => {
+  const t = { id: "r", children: [{ id: "a", children: [{ id: "ring", hidden: true }] }, { id: "b" }] };
+  assert.equal(setHidden(t, "ring", false), true);
+  assert.equal(t.children[0].children[0].hidden, undefined);
+  assert.equal(setHidden(t, "ring", false), false);
+  assert.equal(setHidden(t, "ring", true), true);
+  assert.equal(t.children[0].children[0].hidden, true);
+  assert.equal(setHidden(t, "nope", true), false);
 });

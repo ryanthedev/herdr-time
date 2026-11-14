@@ -248,3 +248,16 @@ export function focusBorder(tree, on, saved, red) {
   if (saved.color === null) delete focus.color; else focus.color = saved.color;
   return { changed: true, saved: null };
 }
+
+// Sets `hidden` on the block with this id anywhere in a layout tree. Returns
+// whether it changed. A layout.set rewrites every block's hidden state from
+// the tree, so the dock's state must travel in the same tree.
+export function setHidden(tree, id, hidden) {
+  if (!tree || typeof tree !== "object") return false;
+  if (tree.id === id) {
+    if (Boolean(tree.hidden) === hidden) return false;
+    if (hidden) tree.hidden = true; else delete tree.hidden;
+    return true;
+  }
+  return (tree.children ?? []).reduce((any, c) => setHidden(c, id, hidden) || any, false);
+}

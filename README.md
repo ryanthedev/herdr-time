@@ -90,7 +90,7 @@ Set in the layout block's props (all optional):
 - **`font`** is the font family. Left out, it uses your terminals' font (monospaced), so digits keep their width and the bar doesn't shift each second. `""` uses the app's UI font.
 - **`block`** is this block's layout id. The mod resizes it to fit as things come and go.
 - **`fill`** (`true`) makes the block take the layout's size (give it a weight; it is never resized). The clock is centered in it and the chips, bell and `+` sit to its right.
-- **`dock`** (a block id, e.g. `"time-ring"`) docks the ringing card: add a hidden block `{ "id": "time-ring", "type": "block", "size": { "px": 170 }, "hidden": true, "content": { "mod": "time", "props": { "mode": "dock" } } }` to a visible column; the bar shows it while anything rings and hides it after. A hidden parent (a collapsed sidebar) hides it too. Without `dock`, the floating card is used.
+- **`dock`** (a block id, e.g. `"time-ring"`) docks the ringing card: add a hidden block `{ "id": "time-ring", "type": "block", "size": { "px": 164 }, "hidden": true, "content": { "mod": "time", "props": { "mode": "dock" } } }` between the work area and the status bar (a visible parent: a hidden one hides it too); the bar shows it while anything rings and hides it after. Without `dock`, the floating card is used.
 
 ## Placing it
 
