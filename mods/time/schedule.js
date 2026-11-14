@@ -261,3 +261,22 @@ export function setHidden(tree, id, hidden) {
   }
   return (tree.children ?? []).reduce((any, c) => setHidden(c, id, hidden) || any, false);
 }
+
+// The red border is kept per layout name, so each layout gets its own colour
+// back when it is shown: { [layoutName]: { color } }. Older storage was one
+// { layout, color }.
+export function lookMap(v) {
+  if (!v || typeof v !== "object") return {};
+  return typeof v.layout === "string" && "color" in v ? { [v.layout]: { color: v.color } } : v;
+}
+
+// One step on the shown layout's tree (edited in place). Returns
+// { changed, looks }: looks is the whole map to store (null when empty). Only
+// the named layout's entry is ever touched, and turning on never drops one.
+export function layoutLook(looks, name, tree, on, red) {
+  const map = lookMap(looks);
+  const r = focusBorder(tree, on, map[name] ?? null, red);
+  const next = { ...map };
+  if (r.saved) next[name] = r.saved; else if (!on) delete next[name];
+  return { changed: r.changed, looks: Object.keys(next).length ? next : null };
+}

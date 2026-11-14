@@ -1,7 +1,7 @@
 // node --test test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, ringReminders, focusBorder, setHidden, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
+import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, ringReminders, focusBorder, setHidden, lookMap, layoutLook, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
 
 const at = (y, mo, d, h = 0, mi = 0, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime();
 
@@ -170,4 +170,46 @@ test("setHidden shows and hides one block by id", () => {
   assert.equal(setHidden(t, "ring", true), true);
   assert.equal(t.children[0].children[0].hidden, true);
   assert.equal(setHidden(t, "nope", true), false);
+});
+
+const tree = (color) => ({ id: "root", children: [{ id: "main", content: { pane: { focus: color ? { width: 2, color } : { width: 2 } } } }] });
+const focusOf = (t) => t.children[0].content.pane.focus.color;
+
+test("layoutLook keeps one colour per layout and restores each when shown", () => {
+  const a = tree("#aaa"), b = tree("#bbb");
+  let r = layoutLook(null, "loops", a, true, "#f00");
+  assert.deepEqual(r.looks, { loops: { color: "#aaa" } });
+  assert.equal(focusOf(a), "#f00");
+  // switch to the other layout while ringing: it goes red, loops' entry stays
+  r = layoutLook(r.looks, "matrix", b, true, "#f00");
+  assert.deepEqual(r.looks, { loops: { color: "#aaa" }, matrix: { color: "#bbb" } });
+  // nothing rings: matrix is shown, so only matrix is restored
+  r = layoutLook(r.looks, "matrix", b, false, "#f00");
+  assert.equal(focusOf(b), "#bbb");
+  assert.deepEqual(r.looks, { loops: { color: "#aaa" } });
+  // later loops is shown again: it still gets its colour back
+  r = layoutLook(r.looks, "loops", a, false, "#f00");
+  assert.equal(focusOf(a), "#aaa");
+  assert.equal(r.looks, null);
+});
+
+test("layoutLook on never wipes a saved colour (a second bar sees red already)", () => {
+  const a = tree("#f00");
+  const r = layoutLook({ loops: { color: "#aaa" } }, "loops", a, true, "#f00");
+  assert.equal(r.changed, false);
+  assert.deepEqual(r.looks, { loops: { color: "#aaa" } });
+  assert.equal(layoutLook(null, "loops", a, true, "#f00").looks, null);
+});
+
+test("layoutLook remembers an unset colour and removes it again", () => {
+  const a = tree(null);
+  const r = layoutLook(null, "m", a, true, "#f00");
+  assert.deepEqual(r.looks, { m: { color: null } });
+  layoutLook(r.looks, "m", a, false, "#f00");
+  assert.equal("color" in a.children[0].content.pane.focus, false);
+});
+
+test("lookMap reads the older single-layout storage", () => {
+  assert.deepEqual(lookMap({ layout: "loops", color: "#aaa" }), { loops: { color: "#aaa" } });
+  assert.deepEqual(lookMap(null), {});
 });

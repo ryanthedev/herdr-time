@@ -3,7 +3,7 @@ import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, layout, props, settings, agents, shared, setShared, nextCommand, notify, exec, run, window, openOverlay, closeOverlay, readTextFile, appHome } from "herdr";
 import {
   strftime, pieces, clockOf, lengthOf, parseDuration, parseClock, clockText, nextAt, nextDue,
-  repeatText, whenText, untilText, afterDismiss, ringReminders, focusBorder, setHidden, WEEKDAYS,
+  repeatText, whenText, untilText, afterDismiss, ringReminders, layoutLook, lookMap, setHidden, WEEKDAYS,
 } from "./schedule.js";
 
 // Time: a clock, timers and reminders for the status bar.
@@ -188,24 +188,24 @@ function openFlash(force = false) {
   openOverlay({ mod: MOD, kind: "window", key: "time-banner", frame: "none", ...(at ? { at } : {}), width: CARD_W, height: cardHeight(n), props: { mode: "flash" } });
 }
 
-// The window's pane focus border, red while anything rings, then put back.
-// A layout.set rewrites the layout file, so the colour it replaces is kept in
-// shared "time.look" and restored the moment nothing rings, and again on start
-// if Herdr quit or crashed while it was red.
+// The shown layout's pane focus border, red while anything rings, then put
+// back. It edits a copy of the LIVE layout (layout() carries clicks the file
+// lacks, such as a panel shown with cmd-b, which a layout.set from the file
+// would undo) and sets it with no await in between. The colour each layout had
+// is kept in shared "time.look" by layout name, so a layout shown later still
+// gets its own back, and a restart while red restores it.
 const RED = "#ff3b30";
-async function paintBorder(on) {
-  const saved = shared("time.look");
-  const name = on ? shared("layout") : saved?.layout;
-  if (!name || (!on && !saved) || (!on && name !== shared("layout"))) { if (!on && saved) setShared("time.look", null); return; }
-  const text = await readTextFile(`${appHome()}/layouts/${name}.json`);
-  if (!text) return;
-  const tree = JSON.parse(text);
-  const r = focusBorder(tree, on, saved ? { color: saved.color } : null, RED);
-  setShared("time.look", r.saved ? { layout: name, color: r.saved.color } : null);
+function paintBorder(on) {
+  const name = shared("layout");
+  const looks = shared("time.look");
+  if (!name || (!on && !lookMap(looks)[name])) return;
+  const tree = JSON.parse(JSON.stringify(layout() ?? null));
+  if (!tree) return;
+  const r = layoutLook(looks, name, tree, on, RED);
   // The dock's shown state rides in the same tree: layout.set would undo a layout.show.
   const dock = opts().dock ? setHidden(tree, opts().dock, !on) : false;
-  if (!r.changed && !dock) return;
-  run("layout.set", { layout: tree });
+  if (JSON.stringify(r.looks) !== JSON.stringify(looks ?? null)) setShared("time.look", r.looks);
+  if (r.changed || dock) run("layout.set", { layout: tree });
 }
 
 const openNew = () => openOverlay({ mod: MOD, kind: "dialog", width: 460, height: 430, props: { mode: "new" } });
@@ -253,7 +253,7 @@ export default class Time extends View {
     if (this.mode === "flash") return this.initFlash(cx);
     if (this.mode === "dock") return;
     if (this.mode === "list") return this.initList(cx);
-    if (this.mode === "probe") return;
+    if (this.mode === "probe") return this.initProbe(cx);
     this.shown = ""; this.width = 0;
     this.tick(cx);
     if (items().some((x) => x.rang)) this.alert();           // rang while Herdr was closed
@@ -275,6 +275,11 @@ export default class Time extends View {
   }
 
   close() { closeOverlay(props().overlay); }
+
+  // A probe that never gets a usable size closes itself anyway.
+  initProbe(cx) {
+    cx.timer.after(1500, () => { if (!this.measured) { this.measured = true; this.close(); openFlash(true); } });
+  }
 
   // Reports the window's size once, closes, and lets the card open at the bottom.
   renderProbe() {
@@ -343,9 +348,12 @@ export default class Time extends View {
     }
     const ringing = items().some((x) => x.rang);
     this.showDock(ringing);
-    if (!this.painting && (ringing !== Boolean(this.red) || (!ringing && shared("time.look")))) {
-      this.painting = true; this.red = ringing;
-      paintBorder(ringing).catch(() => {}).finally(() => { this.painting = false; });
+    // Paint when ringing starts or stops, when the shown layout changes, and
+    // while a layout still waiting for its colour is shown.
+    const paintKey = `${ringing}|${shared("layout")}`;
+    if (paintKey !== this.paintKey || (!ringing && lookMap(shared("time.look"))[shared("layout")])) {
+      this.paintKey = paintKey;
+      try { paintBorder(ringing); } catch { /* try again next layout change */ }
     }
     const shown = [strftime(opts().format, new Date(now)), ...items().map((x) => `${x.id}${x.at ? "" : "p"}${x.rang ? "r" : ""}${isTimer(x) ? timerText(x, now) : x.due}${x.msg}`)].join("|");
     if (shown !== this.shown) { this.shown = shown; cx.notify(); }
