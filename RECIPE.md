@@ -1,6 +1,8 @@
 # Time
 
-A clock and timers at the left end of the status bar. The date and time tick every second in any strftime-style format; beside them sit stopwatches and countdowns, each with an optional message and an animated icon. A finished countdown shakes in the bar and flashes a banner in the middle of the window until it is dismissed or snoozed. Timers an agent asks for must name the agent and carry a message, and the agent is shown wherever the timer is.
+A clock, reminders and timers for the status bar. The date and time tick every second in any strftime-style format; beside them sit reminders (at a time of day or after a length, once or repeating: every length, daily, weekdays), stopwatches and countdowns, each with an optional message and an animated icon. A ringing item shakes in the bar and flashes a banner in the middle of the window until it is dismissed or snoozed. Items an agent asks for must name the agent and carry a message.
+
+> Stale: the images (`preview.png`, `docs/*.png`) and the "What you see" section below describe the earlier timers-only version. Not retaken yet. Current behavior: README.md.
 
 ![Time](preview.png)
 
@@ -29,15 +31,15 @@ A clock and timers at the left end of the status bar. The date and time tick eve
 - **A countdown reaching zero** (checked every second by the bar): marked finished with its time, a Herdr notification ("Time's up", the message), `afplay /System/Library/Sounds/Glass.aiff` on macOS, and the banner opens (`openOverlay` with `key: "time-flash"`, so a second finish replaces it in place with both rows). The bar opens it on start too if any finished timer is waiting.
 - **Banner**: +5m removes the timer and starts a 5-minute countdown with the same message; Dismiss removes it; Esc removes every finished timer. It checks every 500ms and closes itself once no finished timer is left. Its buttons stop the mouse-down so a click doesn't drag the window.
 - **Width**: the bar resizes its own layout block (`layout.resize`) whenever its estimated content width changes by 4px or more.
-- **Who set it**: the dialog is the person. Commands (`herdr-app do time.<command>` or a keys.json binding) can't say who sent them, so `timer-<length>` and `stopwatch` must be followed by `@<terminal> <message>`: the asking agent's terminal (`$HC_TERMINAL_ID` in its shell; matched against `agents()` by `address`, or `<machine>/<id>`) and a non-empty message. Missing terminal, a terminal that isn't a live agent, an empty message or a bad length: nothing starts and a "Timer refused" notification (level warning) says why. Accepted: the agent's name, icon, space, tab and title are copied onto the timer (`by`), so they survive the agent going away; +5m keeps them.
+- **Who set it**: the dialog is the person. Commands (`herdr-app do time.<command>` or a keys.json binding) can't say who sent them, so `timer-<length>`, `at-<time>`, `every-<length>`, `daily-<time>`, `weekdays-<time>` and `stopwatch` must be followed by `@<terminal> <message>`: the asking agent's terminal (`$HC_TERMINAL_ID` in its shell; matched against `agents()` by `address`, or `<machine>/<id>`) and a non-empty message. Missing terminal, a terminal that isn't a live agent, an empty message or a bad length: nothing starts and a "Reminder refused" notification (level warning) says why. Accepted: the agent's name, icon, space, tab and title are copied onto the timer (`by`), so they survive the agent going away; +5m keeps them.
 - **Notification on finish**: title "Time's up: <message>", body "Set by Claude Code in herdr-time › 1" (or "Your timer"), action `pane.focus {terminal}` for an agent's timer. The banner's **Go** runs the same.
-- **Other commands**: `new`, `toggle` (newest unfinished), `pause-all`, `resume-all`, `dismiss`, `clear`.
+- **Other commands**: `new`, `list`, `toggle` (newest unfinished), `pause-all`, `resume-all`, `dismiss`, `clear`.
 - No limit on the number of timers.
 - Agent statuses: not used.
 
 ## Built from
 
-- **Layout**: the status block wrapped in a row so the clock sits to its left:
+- **Layout**: the status block wrapped in a row with the time block beside it (first for the left end, last for the right end; the clock stays pinned to the right of its own block either way):
   ```json
   { "id": "status-bar", "type": "row", "size": { "px": 28 }, "resizable": false, "children": [
     { "id": "time", "type": "block", "size": { "px": 330 }, "content": { "mod": "time", "props": { "block": "time" } } },
@@ -45,11 +47,11 @@ A clock and timers at the left end of the status bar. The date and time tick eve
   ```
   No `divider` and no `gap` on the row: either shows a seam.
 - **`mods/time/mod.json`**: `{ "place": "none", "title": "Time" }`.
-- **One mod, three views** by `props().mode`: the bar (no mode), `"new"` (the dialog, opened with `openOverlay({ mod: "time", kind: "dialog", props: { mode: "new" } })`), `"flash"` (the banner, `kind: "window", frame: "none", key: "time-flash"`).
+- **One mod, four views** by `props().mode`: the bar (no mode; order chips, bell with count, `+`, `|`, clock last, right-aligned in an `overflow_hidden` row), `"list"` (every item, soonest first), `"new"` (the dialog: In / At a time / Stopwatch, plus Repeat; opened with `openOverlay({ mod: "time", kind: "dialog", props: { mode: "new" } })`), `"flash"` (the banner, `kind: "window", frame: "none", key: "time-flash"`).
 - **Bar props** (all optional): `format` (default `%a %-d %b %Y-%m-%d | [%H:%M:%S]`), `tooltip`, `presets` (minutes), `font` (default `settings().font_family`; `""` for the UI font), `block` (its layout id, default `time`).
 - **Tokens**, formatted by hand from `Date` (no `Intl`): `%a %A %b %B %d %e %m %y %Y %H %I %p %M %S %s %j %V %u %w %z %%`; `%-x` drops the leading zero. `%V` is ISO 8601, `%z` from `getTimezoneOffset()`.
-- **State**: shared `time.timers`, a list of `{ id, kind: "up" | "down", ms, acc, at, rang, doneAt, msg, by }`, `by` null for the person or `{ terminal, name, icon, tint, space, tab, title }`. Time run = `acc + (now - at)` while running; pausing folds it into `acc` and sets `at` to null. Shared state persists.
-- **Icons**: `mods/time/icons/*.svg`, 24×24 Lucide-style strokes in `currentColor` (stopwatch, hand, hourglass, alarm, pause, plus, x, bot), drawn with `svg("mods/time/icons/<name>.svg")` so they take the text color. The stopwatch hand is its own svg stacked on the body and turned with `.spin(3000)`.
+- **State**: shared `time.timers`, a list of `{ id, kind: "up" | "down" | "at", ... , rang, doneAt, msg, by }`: timers (`up`, `down`) carry `ms`, `acc`, `at`; reminders (`at`) carry `due` and `repeat` (null, `{ every, from }` or `{ at: {h, m}, days }`). Items from before reminders have no `due`/`repeat` and still work. Logic (formatting, parsing, next-due, dismiss) is pure and lives in `mods/time/schedule.js`, tested by `node --test test/`; `by` null for the person or `{ terminal, name, icon, tint, space, tab, title }`. Time run = `acc + (now - at)` while running; pausing folds it into `acc` and sets `at` to null. Shared state persists.
+- **Icons**: `mods/time/icons/*.svg`, 24×24 Lucide-style strokes in `currentColor` (stopwatch, hand, hourglass, alarm, pause, plus, x, bot, bell, repeat, calendar-clock), drawn with `svg("mods/time/icons/<name>.svg")` so they take the text color. The stopwatch hand is its own svg stacked on the body and turned with `.spin(3000)`.
 - **herdr**: `theme`, `layout`, `props`, `settings`, `agents`, `shared`, `setShared`, `nextCommand`, `notify`, `exec`, `run("layout.resize")`, `window`, `openOverlay`, `closeOverlay`.
 - **gpui-kit / gpui-base**: `div`, `svg`, `image`, `h_flex`, `v_flex`, `InputState`, `Input`, `.spin`, `.loop`, `.transition("width")`, `.font_family`, `.tooltip`, `.on_click((e, cx) => …)`, `.on_mouse_down("left", …)`, `.track_focus`, `.on_key_down`.
 - **Programs**: `afplay` (macOS only) for the chime. No network, no files outside its folder.
@@ -64,6 +66,7 @@ A clock and timers at the left end of the status bar. The date and time tick eve
 - A frameless `window` overlay drags on any press its controls don't stop.
 - The banner only reopens on the next finish or the next start; closing it some other way (`overlay.close`) leaves finished timers in the bar.
 - `herdr-app do` answers `ok` even when the mod refuses the timer, so a refused agent never hears about it; only the person sees the notification. Nor can the mod prove who sent a command: an agent could name another's terminal.
+- `InputState` has no `set_placeholder`; the dialog keeps one field per kind. The layout can reset the block's px (`layout.set`), so the bar re-asserts its width in `on_size_change`.
 - `"place": "none"` means the mod never starts until a layout block names it.
 
 ## Done when
