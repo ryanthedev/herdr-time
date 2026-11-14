@@ -3,7 +3,7 @@ import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, layout, props, settings, agents, shared, setShared, nextCommand, notify, exec, run, window, openOverlay, closeOverlay } from "herdr";
 import {
   strftime, pieces, clockOf, lengthOf, parseDuration, parseClock, clockText, nextAt, nextDue,
-  repeatText, whenText, untilText, afterDismiss, reringSlot, WEEKDAYS,
+  repeatText, whenText, untilText, afterDismiss, ringReminders, WEEKDAYS,
 } from "./schedule.js";
 
 // Time: a clock, timers and reminders for the status bar.
@@ -239,7 +239,7 @@ export default class Time extends View {
   // --- Commands ---------------------------------------------------------------
 
   command(c) {
-    const start = /^(timer-\S*|stopwatch|at-\S*|every-\S*|daily-\S*|weekdays-\S*)(?:\s+([\s\S]*))?$/.exec(c.trim());
+    const start = /^((?:timer|at|every|daily|weekdays)-\S*|stopwatch)(?:\s+([\s\S]*))?$/i.exec(c.trim());
     if (start) return this.commandStart(start[1], start[2] ?? "");
     if (c === "toggle") { const last = items().filter((x) => isTimer(x) && !x.rang).at(-1); if (last) toggleTimer(last.id); }
     else if (c === "pause-all") setAll(false);
@@ -253,7 +253,7 @@ export default class Time extends View {
   // Started by command: needs "@<agent terminal> <message>".
   commandStart(head, rest) {
     const refuse = (why) => notify({ title: "Reminder refused", body: why, level: "warning" });
-    const [verb, arg = ""] = head === "stopwatch" ? ["stopwatch"] : [head.slice(0, head.indexOf("-")), head.slice(head.indexOf("-") + 1)];
+    const [verb, arg = ""] = head.toLowerCase() === "stopwatch" ? ["stopwatch"] : [head.slice(0, head.indexOf("-")).toLowerCase(), head.slice(head.indexOf("-") + 1)];
     const ms = verb === "timer" || verb === "every" ? parseDuration(arg) : 0;
     const clock = verb === "at" || verb === "daily" || verb === "weekdays" ? parseClock(arg) : null;
     if ((verb === "timer" || verb === "every") && !ms) return refuse(`"${arg}" is not a length. Try 25m, 90s or 1h30m.`);
@@ -277,16 +277,14 @@ export default class Time extends View {
 
   tick(cx) {
     const now = Date.now();
-    // Countdowns that ran out and reminders that came due: mark, announce, flash, ring.
-    // A repeating reminder nobody dismissed: its next slot passed, so it rings again.
-    const again = new Map(items().flatMap((x) => { const slot = reringSlot(x, now); return slot ? [[x.id, slot]] : []; }));
-    const list = items().map((x) => (again.has(x.id) ? { ...x, rang: false } : x));
-    const due = list.filter((x) => !x.rang && ((x.kind === "down" && x.at && remaining(x, now) === 0) || (x.kind === "at" && (again.has(x.id) || x.due <= now))));
+    // Reminders that came due (or a repeat left ringing whose next slot passed),
+    // then countdowns that ran out: mark, announce, flash, ring.
+    const stepped = ringReminders(items(), now);
+    const list = stepped.list;
+    const downs = list.filter((x) => !x.rang && x.kind === "down" && x.at && remaining(x, now) === 0);
+    const due = [...stepped.fired, ...downs];
     if (due.length) {
-      save(list.map((x) => (!due.includes(x) ? x
-        : x.kind === "down" ? { ...x, rang: true, doneAt: now, acc: x.ms, at: null }
-        : again.has(x.id) ? { ...x, rang: true, due: again.get(x.id), doneAt: again.get(x.id) }
-        : { ...x, rang: true, doneAt: x.due })));
+      save(list.map((x) => (downs.includes(x) ? { ...x, rang: true, doneAt: now, acc: x.ms, at: null } : x)));
       for (const x of due) notify({ title: `${x.kind === "at" ? "Reminder" : "Time's up"}: ${nameOf(x)}`, body: x.by ? `Set by ${whoOf(x)}` : x.repeat ? `Repeats ${repeatText(x.repeat)}` : "Your reminder", level: "success",
         action: x.by ? { name: "pane.focus", args: { terminal: x.by.terminal } } : null });
       openFlash();
@@ -316,6 +314,7 @@ export default class Time extends View {
     if (all.length) {
       const n = String(reminders || all.length);
       out.push({
+        fixed: true,
         w: 12 + 13 + 4 + n.length * ch,
         el: () => h_flex().id("tm-list").flex_none().gap(4).px(6).h(20).items_center().rounded(10).cursor_pointer().text_color(t.muted)
           .tooltip(`${all.length} reminder${all.length === 1 ? "" : "s"} and timer${all.length === 1 ? "" : "s"} · click to see them all`)
@@ -325,6 +324,7 @@ export default class Time extends View {
       });
     }
     out.push({
+      fixed: true,
       w: 12 + 13,
       el: () => h_flex().id("tm-new").flex_none().px(6).h(20).items_center().rounded(10).cursor_pointer().text_color(t.dim).tooltip("new reminder or timer")
         .hover((s) => s.bg(t.hover).text_color(t.accent))
@@ -416,6 +416,9 @@ export default class Time extends View {
       // left one is empty, the right one holds the chips, left-aligned.
       const ps = this.parts(Date.now(), t).filter((p) => !p.sep);
       const clock = ps.pop();
+      // Bell and + right after the clock, so many chips clip the chips, not them.
+      const chips = ps.filter((p) => !p.fixed), fixed = ps.filter((p) => p.fixed);
+      ps.splice(0, ps.length, ...fixed, ...chips);
       return h_flex().id("time-bar").size_full().px(PAD_L).items_center().whitespace_nowrap().overflow_hidden()
         .bg(glass(t.background)).border_t(1).border_color(t.border).text_size(11.8)
         .when(Boolean(font), (el) => el.font_family(font))

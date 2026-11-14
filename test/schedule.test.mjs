@@ -1,7 +1,7 @@
 // node --test test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
+import { parseClock, nextAt, nextDue, repeatText, whenText, untilText, afterDismiss, reringSlot, ringReminders, parseDuration, WEEKDAYS } from "../mods/time/schedule.js";
 
 const at = (y, mo, d, h = 0, mi = 0, s = 0) => new Date(y, mo - 1, d, h, mi, s).getTime();
 
@@ -111,4 +111,30 @@ test("whenText names past days", () => {
   assert.equal(whenText(at(2026, 11, 12, 23, 30), now), "yesterday 23:30");
   assert.equal(whenText(at(2026, 11, 11, 9, 0), now), "Wed 09:00");
   assert.equal(whenText(at(2026, 11, 1, 9, 0), now), "1 Nov 09:00");
+});
+
+test("a repeat that came due while asleep rings once, not twice", () => {
+  const due = at(2026, 11, 13, 9, 0);
+  const x = { id: "r", kind: "at", rang: false, due, doneAt: null, repeat: { every: 30 * 60000, from: due } };
+  const now = at(2026, 11, 13, 14, 10);
+  const one = ringReminders([x], now);
+  assert.equal(one.fired.length, 1);
+  assert.equal(one.list[0].due, at(2026, 11, 13, 14, 0));
+  assert.equal(one.list[0].doneAt, at(2026, 11, 13, 14, 0));
+  // The next tick, a second later, has nothing to ring.
+  const two = ringReminders(one.list, now + 1000);
+  assert.equal(two.fired.length, 0);
+  assert.equal(two.list, one.list);
+  // Until the next slot passes while it still rings.
+  assert.equal(ringReminders(one.list, at(2026, 11, 13, 14, 30)).fired.length, 1);
+  // Daily, closed over two days: once, on the latest slot.
+  const d = { id: "d", kind: "at", rang: false, due, repeat: { at: { h: 9, m: 0 } } };
+  const r = ringReminders([d], at(2026, 11, 15, 10, 0));
+  assert.equal(r.fired.length, 1);
+  assert.equal(r.list[0].due, at(2026, 11, 15, 9, 0));
+  assert.equal(ringReminders(r.list, at(2026, 11, 15, 10, 0, 1)).fired.length, 0);
+  // A one-off keeps its own time; other kinds are left alone.
+  const o = ringReminders([{ id: "o", kind: "at", rang: false, due, repeat: null }, { id: "t", kind: "down" }], now);
+  assert.equal(o.fired.length, 1);
+  assert.equal(o.list[0].doneAt, due);
 });

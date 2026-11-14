@@ -201,3 +201,29 @@ export function reringSlot(x, now) {
   for (let next = nextDue(x.repeat, slot); next && next <= now; next = nextDue(x.repeat, slot)) slot = next;
   return slot;
 }
+
+// The latest slot of a repeat at or after `slot` that has already passed.
+const latestPassed = (repeat, slot, now) => {
+  for (let next = nextDue(repeat, slot); next && next <= now; next = nextDue(repeat, slot)) slot = next;
+  return slot;
+};
+
+// One tick for reminders (kind "at"): the ones whose time came ring, and a
+// repeating one left ringing rings again when its next slot passes. A repeat
+// that comes due late (Herdr closed, laptop asleep) rings once, stamped with
+// the latest slot that passed, so the next tick doesn't ring it again.
+// Returns { list, fired } with the changed items in `fired`.
+export function ringReminders(list, now) {
+  const fired = [];
+  const next = list.map((x) => {
+    if (x.kind !== "at") return x;
+    let slot = null;
+    if (x.rang) slot = reringSlot(x, now);
+    else if (x.due <= now) slot = x.repeat ? latestPassed(x.repeat, x.due, now) : x.due;
+    if (slot === null) return x;
+    const y = { ...x, rang: true, due: slot, doneAt: slot };
+    fired.push(y);
+    return y;
+  });
+  return { list: fired.length ? next : list, fired };
+}
